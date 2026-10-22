@@ -1,5 +1,6 @@
 """
-Heart Eyes!A  procedural eye rendered as colored ASCII, built with numpy + pygame.
+Heart Eyes  -  a procedural eye rendered as colored ASCII, with an original synthesized
+cinematic soundtrack, built with numpy + pygame.
 
 Timeline (loops every ~15 s):
   0 - 5 s   a brown eye looks around, blinks, pupil breathes
@@ -9,25 +10,30 @@ Timeline (loops every ~15 s):
 
 Install:   pip install numpy pygame
 Run:       python heart_eyes.py
-Keys:      ESC = quit,  SPACE = restart timeline,  S = save screenshot
+Keys:      ESC = quit,  SPACE = restart (picture + music),  M = mute,  S = screenshot
 """
 
 import sys
 import numpy as np
 import pygame
 
-# settings
+# ----------------------------------------------------------------- settings
 COLS, ROWS = 110, 62          # ASCII grid size
 CELL_W, CELL_H = 9, 14        # pixel size of one character cell
 FONT_SIZE = 14
 FPS = 24
 LOOP = 15.0
+
+# ---- δικό σου τραγούδι (βάλε το αρχείο στον ίδιο φάκελο με το script)
+MUSIC_FILE = "song.mp3"     # .mp3 / .ogg / .wav
+MUSIC_START = 23.0          # από ποιο δευτερόλεπτο του τραγουδιού να ξεκινά
+MUSIC_FADE_MS = 600         # fade in / fade out στα όρια κάθε κύκλου
 RAMP = " .'`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
 RAMP = np.array(list(RAMP))
 rng = np.random.default_rng(7)
 
 
-# helpers
+# ----------------------------------------------------------------- helpers
 def smoothstep(a, b, x):
     t = np.clip((x - a) / (b - a + 1e-9), 0, 1)
     return t * t * (3 - 2 * t)
@@ -44,7 +50,7 @@ X = (xs / (COLS - 1) * 2 - 1) * ASPECT      # -aspect .. aspect
 Y = ys / (ROWS - 1) * 2 - 1                  # -1 .. 1
 
 
-# Eye model
+# ----------------------------------------------------------------- eye model
 def eye_layers(t, look_x, look_y, openness, pupil_r):
     """Return rgb image (ROWS, COLS, 3) in 0..1 for the human eye."""
     # almond shaped eyelid opening
@@ -75,21 +81,21 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     limbal = smoothstep(0.80, 1.0, rn)[..., None]       # dark ring around iris
     iris = iris * (1 - 0.75 * limbal)
 
-    # Pupil
+    # pupil
     pupil = r < pupil_r
     edge = smoothstep(pupil_r + 0.03, pupil_r - 0.01, r)
 
     img = np.where(in_iris[..., None], iris, sclera)
     img = img * (1 - edge[..., None] * 0.97)
 
-    # Specular highlight
+    # specular highlight
     hx, hy = cx - 0.17, cy - 0.17
     hl = np.exp(-(((X - hx) ** 2 + (Y - hy) ** 2) / 0.006))
     img = img + hl[..., None] * 0.9
     hl2 = np.exp(-(((X - cx - 0.15) ** 2 + (Y - cy + 0.14) ** 2) / 0.002))
     img = img + hl2[..., None] * 0.4
 
-    # Eyelid skin outside
+    # eyelid skin outside
     skin = np.array([0.38, 0.22, 0.16], np.float32) * (0.5 + 0.3 * (1 - np.abs(Y)))[..., None]
     # lash line (dark rim)
     rim = np.exp(-(((np.abs(Y) - lid_h) / 0.035) ** 2)) * (np.abs(u) < 1.0)
@@ -98,7 +104,7 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     return np.clip(out, 0, 1)
 
 
-# Heart model
+# ----------------------------------------------------------------- heart model
 def heart_mask(scale, cx=0.0, cy=0.05):
     """Signed-ish heart field: >0 inside. Classic implicit heart curve."""
     x = (X - cx) / scale * 1.25
@@ -120,7 +126,7 @@ def heart_layer(t, scale):
     return np.clip(col, 0, 1), inside
 
 
-# Sparkles
+# ----------------------------------------------------------------- sparkles
 N_STARS = 45
 star_x = rng.uniform(-ASPECT, ASPECT, N_STARS)
 star_y = rng.uniform(-1, 1, N_STARS)
@@ -147,7 +153,7 @@ def sparkle_layer(t, strength):
     return np.clip(img, 0, 1)
 
 
-# Timeline
+# ----------------------------------------------------------------- timeline
 def compose(t):
     t = t % LOOP
 
@@ -179,7 +185,7 @@ def compose(t):
     return img
 
 
-# ASCII draw
+# ----------------------------------------------------------------- ASCII draw
 class AsciiRenderer:
     def __init__(self, font):
         self.font = font
@@ -212,6 +218,175 @@ class AsciiRenderer:
                 surf.blit(self.glyph(RAMP[i], rgb), (c * CELL_W, r * CELL_H))
 
 
+
+# ----------------------------------------------------------------- music
+SR = 44100
+
+
+def _sstep(a, b, x):
+    t = np.clip((x - a) / (b - a), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _snap(f):
+    """Snap a frequency to a whole number of cycles per loop -> perfectly seamless loop."""
+    return round(f * LOOP) / LOOP
+
+
+def _reverb(sig, seconds=3.2, seed=1):
+    """Circular FFT reverb (the tail wraps around, so the loop stays seamless)."""
+    r = np.random.default_rng(seed)
+    n = len(sig)
+    m = int(seconds * SR)
+    tt = np.arange(m) / SR
+    ir = r.standard_normal(m) * np.exp(-tt / (seconds / 4.5))
+    ir = np.convolve(ir, np.ones(24) / 24, mode="same")          # darker tail
+    ir[: int(0.02 * SR)] *= np.linspace(0, 1, int(0.02 * SR))      # soft attack
+    ir /= np.sqrt(np.sum(ir ** 2))
+    IR = np.fft.rfft(ir, n)
+    return np.fft.irfft(np.fft.rfft(sig) * IR, n)
+
+
+def make_music():
+    """Build an original cinematic score that follows the visual timeline. Returns int16 (N, 2)."""
+    N = int(LOOP * SR)
+    t = np.arange(N) / SR
+    r = np.random.default_rng(11)
+    TAU = 2 * np.pi
+
+    # slow "tension" curve: 0 during the eye, 1 on the heart
+    bright = 0.25 + 0.75 * _sstep(4.5, 8.0, t) * (1 - _sstep(13.0, 15.0, t) * 0.7)
+
+    # ---- sub drone (A1) + gentle swell
+    f0 = _snap(55.0)
+    drone = np.sin(TAU * f0 * t) + 0.35 * np.sin(TAU * 2 * f0 * t)
+    drone *= 0.30 + 0.25 * np.sin(TAU * t / LOOP - 1.0) ** 2 + 0.25 * _sstep(5, 8, t)
+
+    # ---- evolving pads: Am - F - C - G, cross-faded around the loop
+    chords = [(110.0, 130.81, 164.81), (87.31, 110.0, 130.81),
+              (130.81, 164.81, 196.0), (98.0, 123.47, 146.83)]
+    bar = LOOP / len(chords)
+    padL = np.zeros(N)
+    padR = np.zeros(N)
+    for ci, notes in enumerate(chords):
+        centre = (ci + 0.5) * bar
+        d = ((t - centre + LOOP / 2) % LOOP) - LOOP / 2
+        w = np.where(np.abs(d) < bar, np.cos(np.pi * d / (2 * bar)) ** 2, 0.0)
+        for nf in notes:
+            for det, pan in ((-3 / LOOP, 0.25), (0.0, 0.5), (3 / LOOP, 0.75)):
+                f = _snap(nf) + det
+                vib = 0.0015 * np.sin(TAU * 4 * t / LOOP * 3)          # slow integer-cycle vibrato
+                ph = TAU * f * t + vib * TAU * f * 0.0 + 0.6 * np.sin(TAU * 3 * t / LOOP)
+                voice = np.zeros(N)
+                for k in range(1, 8):
+                    g = np.exp(-(k - 1) / (1.0 + 5.0 * bright))
+                    voice += g / k * np.sin(k * ph)
+                voice *= w
+                padL += voice * (1 - pan)
+                padR += voice * pan
+    # airy octave-up shimmer that blooms with the heart
+    for nf in (329.63, 392.0, 493.88):
+        f = _snap(nf)
+        sh = np.sin(TAU * f * t + 0.8 * np.sin(TAU * 5 * t / LOOP)) * 0.05 * _sstep(5, 8, t) * (1 - _sstep(13, 15, t))
+        padL += sh * 0.8
+        padR += sh * 1.0
+
+    # ---- riser (4.5 -> 8 s) and impact at 8 s
+    rise = _sstep(4.5, 8.0, t) ** 2.2 * (t < 8.0)
+    noise = r.standard_normal(N)
+    hp = np.diff(noise, prepend=0.0)                                   # crude high-pass
+    riser = hp * rise * 0.10
+    sweep = np.sin(TAU * np.cumsum(220 + 880 * _sstep(4.5, 8.0, t) ** 2) / SR) * rise * 0.10
+    ti = np.clip(t - 8.0, 0, None)
+    boom_env = np.exp(-ti / 0.9) * (t >= 8.0)
+    boom = np.sin(TAU * np.cumsum(70 * np.exp(-ti / 0.5) + 28) / SR) * boom_env * 1.1
+    boom += r.standard_normal(N) * np.exp(-ti / 0.25) * (t >= 8.0) * 0.12
+
+    # ---- heartbeat, locked to the visual pulse: sin(7t)^2 peaks at t = (pi/2 + n*pi) / 7
+    heart = np.zeros(N)
+    beat_gain = _sstep(7.0, 8.5, t) * (1 - _sstep(13.0, 14.6, t))
+    n = 0
+    while True:
+        bt = (np.pi / 2 + n * np.pi) / 7.0
+        n += 1
+        if bt > LOOP:
+            break
+        if bt < 6.0:
+            continue
+        for off, amp in ((0.0, 1.0), (0.14, 0.55)):                    # "lub-dub"
+            tt = t - (bt + off)
+            m = tt >= 0
+            e = np.exp(-np.where(m, tt, 0) / 0.11) * m
+            heart += np.sin(TAU * np.cumsum(np.where(m, 80 * np.exp(-np.where(m, tt, 0) / 0.08) + 38, 0)) / SR) * e * amp
+    heart *= beat_gain * 0.9
+
+    # ---- sparkle chimes (A minor pentatonic, bell-like, inharmonic partials)
+    pent = [880.0, 1046.5, 1318.5, 1568.0, 1760.0, 2093.0]
+    chL = np.zeros(N)
+    chR = np.zeros(N)
+    for _ in range(26):
+        ct = r.uniform(5.8, 14.0)
+        f = r.choice(pent)
+        tt = (t - ct) % LOOP                                           # wraps so tails loop
+        e = np.exp(-tt / r.uniform(0.7, 1.6)) * (1 - np.exp(-tt / 0.004))
+        v = (np.sin(TAU * f * tt) + 0.4 * np.sin(TAU * f * 2.76 * tt) + 0.15 * np.sin(TAU * f * 5.4 * tt)) * e
+        v *= r.uniform(0.02, 0.06)
+        p = r.uniform(0.1, 0.9)
+        chL += v * (1 - p)
+        chR += v * p
+
+    # ---- mix with reverb
+    dryL = drone * 0.55 + padL * 0.030 + riser + sweep + boom + heart
+    dryR = drone * 0.55 + padR * 0.030 + riser * 0.9 + sweep + boom + heart
+    wetL = _reverb(padL * 0.030 + chL * 1.6 + boom * 0.4, 3.4, 1)
+    wetR = _reverb(padR * 0.030 + chR * 1.6 + boom * 0.4, 3.4, 2)
+    L = dryL + chL + wetL * 0.9
+    R = dryR + chR + wetR * 0.9
+
+    # gentle master fade of the energy at the very ends is NOT needed (loop is seamless)
+    out = np.stack([L, R], 1)
+    out = np.tanh(out * 0.9)                                           # soft saturation / glue
+    out /= np.max(np.abs(out)) / 0.85
+    return np.ascontiguousarray((out * 32767).astype(np.int16))
+
+
+def start_song():
+    """Play MUSIC_FILE from MUSIC_START for one video cycle. Returns True if it worked."""
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), MUSIC_FILE)
+    if not os.path.exists(path):
+        return False
+    try:
+        if not pygame.mixer.get_init():
+            pygame.mixer.init(frequency=SR, size=-16, channels=2, buffer=1024)
+        pygame.mixer.music.load(path)
+        pygame.mixer.music.play(loops=0, start=MUSIC_START, fade_ms=MUSIC_FADE_MS)
+        return True
+    except Exception as exc:                                           # noqa: BLE001
+        print("Could not play", MUSIC_FILE, "->", exc)
+        return False
+
+
+def start_music(save_wav=True):
+    """Generate + start the looping score. Fails quietly if there is no audio device."""
+    try:
+        pygame.mixer.init(frequency=SR, size=-16, channels=2, buffer=1024)
+        data = make_music()
+        if save_wav:
+            import wave
+            with wave.open("heart_eyes_music.wav", "wb") as wf:
+                wf.setnchannels(2)
+                wf.setsampwidth(2)
+                wf.setframerate(SR)
+                wf.writeframes(data.tobytes())
+        snd = pygame.sndarray.make_sound(data)
+        snd.play(loops=-1)
+        return snd
+    except Exception as exc:                                           # noqa: BLE001
+        print("Audio disabled:", exc)
+        return None
+
+
 # Main
 def main():
     pygame.init()
@@ -221,6 +396,15 @@ def main():
     font = pygame.font.SysFont("couriernew,consolas,dejavusansmono,monospace", FONT_SIZE, bold=True)
     renderer = AsciiRenderer(font)
     clock = pygame.time.Clock()
+    using_song = start_song()
+    music = None
+    if using_song:
+        print(f"Playing {MUSIC_FILE} from {MUSIC_START:.0f}s")
+    else:
+        print(f"{MUSIC_FILE} not found -> composing built-in soundtrack...")
+        music = start_music()
+    muted = False
+    cycle = 0
     t0 = pygame.time.get_ticks() / 1000
     shot = 0
 
@@ -232,11 +416,31 @@ def main():
             if e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_SPACE:
                     t0 = pygame.time.get_ticks() / 1000
+                    cycle = 0
+                    if using_song:
+                        start_song()
+                    elif music:
+                        music.stop()
+                        music.play(loops=-1)
+                if e.key == pygame.K_m:
+                    muted = not muted
+                    if using_song:
+                        pygame.mixer.music.set_volume(0.0 if muted else 1.0)
+                    elif music:
+                        music.set_volume(0.0 if muted else 1.0)
                 if e.key == pygame.K_s:
                     pygame.image.save(screen, f"heart_eyes_{shot}.png")
                     shot += 1
 
         t = pygame.time.get_ticks() / 1000 - t0
+        # τραγούδι: στο τέλος κάθε κύκλου (LOOP) ξαναρχίζει από το MUSIC_START
+        if using_song:
+            c = int(t // LOOP)
+            if c != cycle:
+                cycle = c
+                start_song()
+            elif t % LOOP > LOOP - MUSIC_FADE_MS / 1000 and pygame.mixer.music.get_busy():
+                pygame.mixer.music.fadeout(MUSIC_FADE_MS)
         screen.fill((4, 3, 5))
         renderer.draw(screen, compose(t))
         pygame.display.flip()
