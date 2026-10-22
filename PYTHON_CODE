@@ -44,7 +44,7 @@ X = (xs / (COLS - 1) * 2 - 1) * ASPECT      # -aspect .. aspect
 Y = ys / (ROWS - 1) * 2 - 1                  # -1 .. 1
 
 
-# ----------------------------------------------------------------- eye model
+# Eye model
 def eye_layers(t, look_x, look_y, openness, pupil_r):
     """Return rgb image (ROWS, COLS, 3) in 0..1 for the human eye."""
     # almond shaped eyelid opening
@@ -75,21 +75,21 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     limbal = smoothstep(0.80, 1.0, rn)[..., None]       # dark ring around iris
     iris = iris * (1 - 0.75 * limbal)
 
-    # pupil
+    # Pupil
     pupil = r < pupil_r
     edge = smoothstep(pupil_r + 0.03, pupil_r - 0.01, r)
 
     img = np.where(in_iris[..., None], iris, sclera)
     img = img * (1 - edge[..., None] * 0.97)
 
-    # specular highlight
+    # Specular highlight
     hx, hy = cx - 0.17, cy - 0.17
     hl = np.exp(-(((X - hx) ** 2 + (Y - hy) ** 2) / 0.006))
     img = img + hl[..., None] * 0.9
     hl2 = np.exp(-(((X - cx - 0.15) ** 2 + (Y - cy + 0.14) ** 2) / 0.002))
     img = img + hl2[..., None] * 0.4
 
-    # eyelid skin outside
+    # Eyelid skin outside
     skin = np.array([0.38, 0.22, 0.16], np.float32) * (0.5 + 0.3 * (1 - np.abs(Y)))[..., None]
     # lash line (dark rim)
     rim = np.exp(-(((np.abs(Y) - lid_h) / 0.035) ** 2)) * (np.abs(u) < 1.0)
@@ -98,7 +98,7 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     return np.clip(out, 0, 1)
 
 
-# ----------------------------------------------------------------- heart model
+# Heart model
 def heart_mask(scale, cx=0.0, cy=0.05):
     """Signed-ish heart field: >0 inside. Classic implicit heart curve."""
     x = (X - cx) / scale * 1.25
@@ -120,7 +120,7 @@ def heart_layer(t, scale):
     return np.clip(col, 0, 1), inside
 
 
-# ----------------------------------------------------------------- sparkles
+# Sparkles
 N_STARS = 45
 star_x = rng.uniform(-ASPECT, ASPECT, N_STARS)
 star_y = rng.uniform(-1, 1, N_STARS)
@@ -147,7 +147,7 @@ def sparkle_layer(t, strength):
     return np.clip(img, 0, 1)
 
 
-# ----------------------------------------------------------------- timeline
+# Timeline
 def compose(t):
     t = t % LOOP
 
@@ -179,7 +179,7 @@ def compose(t):
     return img
 
 
-# ----------------------------------------------------------------- ASCII draw
+# ASCII draw
 class AsciiRenderer:
     def __init__(self, font):
         self.font = font
@@ -212,7 +212,7 @@ class AsciiRenderer:
                 surf.blit(self.glyph(RAMP[i], rgb), (c * CELL_W, r * CELL_H))
 
 
-# ----------------------------------------------------------------- main
+# Main
 def main():
     pygame.init()
     W, H = COLS * CELL_W, ROWS * CELL_H
