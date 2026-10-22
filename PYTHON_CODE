@@ -1,1 +1,248 @@
+"""
+Heart Eyes!A  procedural eye rendered as colored ASCII, built with numpy + pygame.
+
+Timeline (loops every ~15 s):
+  0 - 5 s   a brown eye looks around, blinks, pupil breathes
+  5 - 8 s   the eye dissolves into the dark, the pupil morphs into a heart
+  8 - 13 s  glowing pink heart pulses, sparkles twinkle in the dark
+  13 - 15 s heart fades out, eye fades back in
+
+Install:   pip install numpy pygame
+Run:       python heart_eyes.py
+Keys:      ESC = quit,  SPACE = restart timeline,  S = save screenshot
+"""
+
+import sys
+import numpy as np
+import pygame
+
+# settings
+COLS, ROWS = 110, 62          # ASCII grid size
+CELL_W, CELL_H = 9, 14        # pixel size of one character cell
+FONT_SIZE = 14
+FPS = 24
+LOOP = 15.0
+RAMP = " .'`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
+RAMP = np.array(list(RAMP))
+rng = np.random.default_rng(7)
+
+
+# helpers
+def smoothstep(a, b, x):
+    t = np.clip((x - a) / (b - a + 1e-9), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def mix(a, b, t):
+    return a + (b - a) * t
+
+
+# coordinate grid in "square" units (cells are ~1:1.55 tall, so correct for it)
+ys, xs = np.mgrid[0:ROWS, 0:COLS].astype(np.float32)
+ASPECT = (CELL_W * COLS) / (CELL_H * ROWS)
+X = (xs / (COLS - 1) * 2 - 1) * ASPECT      # -aspect .. aspect
+Y = ys / (ROWS - 1) * 2 - 1                  # -1 .. 1
+
+
+# ----------------------------------------------------------------- eye model
+def eye_layers(t, look_x, look_y, openness, pupil_r):
+    """Return rgb image (ROWS, COLS, 3) in 0..1 for the human eye."""
+    # almond shaped eyelid opening
+    u = X / 1.15
+    lid_h = 0.80 * openness * np.clip(1 - u * u, 0, 1) ** 0.85
+    inside = np.abs(Y) < lid_h
+
+    # sclera: slightly pink/white, darker toward the corners
+    sclera = np.stack([0.62, 0.52, 0.48], -1) * (1 - 0.55 * np.clip(np.abs(u), 0, 1) ** 2)[..., None]
+    sclera = sclera * (1 - 0.45 * (np.abs(Y) / (lid_h + 1e-3)) ** 2)[..., None]
+
+    # iris
+    cx, cy = look_x * 0.45, look_y * 0.18
+    dx, dy = X - cx, Y - cy
+    r = np.sqrt(dx * dx + dy * dy)
+    ang = np.arctan2(dy, dx)
+    iris_r = 0.50
+    in_iris = r < iris_r
+
+    fibers = 0.5 + 0.5 * np.sin(ang * 38 + np.sin(ang * 7) * 2.0)
+    fibers2 = 0.5 + 0.5 * np.sin(ang * 90 + r * 20)
+    rn = np.clip(r / iris_r, 0, 1)
+
+    inner = np.array([0.95, 0.55, 0.20], np.float32)    # warm amber near pupil
+    outer = np.array([0.45, 0.20, 0.07], np.float32)    # deep brown rim
+    iris = mix(inner, outer, smoothstep(0.2, 1.0, rn)[..., None])
+    iris = iris * (0.55 + 0.45 * fibers[..., None]) * (0.8 + 0.2 * fibers2[..., None])
+    limbal = smoothstep(0.80, 1.0, rn)[..., None]       # dark ring around iris
+    iris = iris * (1 - 0.75 * limbal)
+
+    # pupil
+    pupil = r < pupil_r
+    edge = smoothstep(pupil_r + 0.03, pupil_r - 0.01, r)
+
+    img = np.where(in_iris[..., None], iris, sclera)
+    img = img * (1 - edge[..., None] * 0.97)
+
+    # specular highlight
+    hx, hy = cx - 0.17, cy - 0.17
+    hl = np.exp(-(((X - hx) ** 2 + (Y - hy) ** 2) / 0.006))
+    img = img + hl[..., None] * 0.9
+    hl2 = np.exp(-(((X - cx - 0.15) ** 2 + (Y - cy + 0.14) ** 2) / 0.002))
+    img = img + hl2[..., None] * 0.4
+
+    # eyelid skin outside
+    skin = np.array([0.38, 0.22, 0.16], np.float32) * (0.5 + 0.3 * (1 - np.abs(Y)))[..., None]
+    # lash line (dark rim)
+    rim = np.exp(-(((np.abs(Y) - lid_h) / 0.035) ** 2)) * (np.abs(u) < 1.0)
+    out = np.where(inside[..., None], img, skin)
+    out = out * (1 - 0.9 * rim[..., None])
+    return np.clip(out, 0, 1)
+
+
+# ----------------------------------------------------------------- heart model
+def heart_mask(scale, cx=0.0, cy=0.05):
+    """Signed-ish heart field: >0 inside. Classic implicit heart curve."""
+    x = (X - cx) / scale * 1.25
+    y = -(Y - cy) / scale * 1.25 + 0.15
+    f = (x * x + y * y - 1) ** 3 - x * x * y ** 3
+    return -f
+
+
+def heart_layer(t, scale):
+    f = heart_mask(scale)
+    inside = smoothstep(-0.02, 0.05, f)
+    # pink gradient with horizontal "scanline" shimmer
+    gy = smoothstep(-0.8, 0.8, Y)[..., None]
+    pink = mix(np.array([1.0, 0.55, 0.70], np.float32), np.array([0.80, 0.12, 0.35], np.float32), gy)
+    glow = np.exp(-np.clip(-f, 0, None) * 6) * 0.35
+    shimmer = 0.85 + 0.15 * np.sin(Y * 90 + t * 6)
+    col = pink * (0.75 + 0.45 * inside[..., None]) * shimmer[..., None]
+    col = col * np.clip(inside + glow, 0, 1)[..., None]
+    return np.clip(col, 0, 1), inside
+
+
+# ----------------------------------------------------------------- sparkles
+N_STARS = 45
+star_x = rng.uniform(-ASPECT, ASPECT, N_STARS)
+star_y = rng.uniform(-1, 1, N_STARS)
+star_phase = rng.uniform(0, 6.28, N_STARS)
+star_speed = rng.uniform(1.5, 4.0, N_STARS)
+star_size = rng.uniform(0.6, 1.4, N_STARS)
+
+
+def sparkle_layer(t, strength):
+    img = np.zeros((ROWS, COLS, 3), np.float32)
+    if strength <= 0.01:
+        return img
+    for i in range(N_STARS):
+        b = 0.5 + 0.5 * np.sin(t * star_speed[i] + star_phase[i])
+        b = b ** 3 * strength
+        if b < 0.05:
+            continue
+        dx, dy = X - star_x[i], Y - star_y[i]
+        # 4-point star: long thin cross + soft core
+        cross = np.exp(-(dx / (0.015 * star_size[i])) ** 2) * np.exp(-(np.abs(dy) / (0.05 * star_size[i])))
+        cross += np.exp(-(dy / (0.015 * star_size[i])) ** 2) * np.exp(-(np.abs(dx) / (0.07 * star_size[i])))
+        core = np.exp(-(dx * dx + dy * dy) / 0.0009)
+        img += (cross + core)[..., None] * b * np.array([1.0, 0.92, 0.95], np.float32)
+    return np.clip(img, 0, 1)
+
+
+# ----------------------------------------------------------------- timeline
+def compose(t):
+    t = t % LOOP
+
+    # eye animation
+    look_x = np.sin(t * 0.9) * 0.8
+    look_y = np.sin(t * 0.6 + 1.0) * 0.5
+    blink_phase = (t % 4.2)
+    blink = 1 - np.exp(-((blink_phase - 3.9) / 0.07) ** 2)
+    openness = 0.9 * blink
+    morph = smoothstep(5.0, 8.0, t)                 # eye -> heart
+    back = smoothstep(13.0, 15.0, t)                # heart -> eye
+    m = morph * (1 - back)
+
+    pupil_r = mix(0.16 + 0.03 * np.sin(t * 2.0), 0.32, smoothstep(3.5, 6.5, t))
+    eye = eye_layers(t, look_x * (1 - m), look_y * (1 - m), openness, pupil_r)
+
+    # eye fades to black as the heart takes over (iris dissolves into particles)
+    dissolve = (rng.random((ROWS, COLS)) < (1 - m * 1.15)).astype(np.float32)
+    eye_vis = np.clip(1 - m * 1.1, 0, 1)
+    eye = eye * eye_vis * np.where(m > 0.05, dissolve, 1.0)[..., None]
+
+    beat = 1 + 0.06 * np.sin(t * 7.0) ** 2
+    heart, hmask = heart_layer(t, 0.42 * beat)
+    heart *= (m ** 0.7)
+
+    spark = sparkle_layer(t, strength=smoothstep(5.5, 8.0, t) * (1 - back))
+
+    img = np.clip(eye + heart + spark, 0, 1)
+    return img
+
+
+# ----------------------------------------------------------------- ASCII draw
+class AsciiRenderer:
+    def __init__(self, font):
+        self.font = font
+        self.cache = {}
+
+    def glyph(self, ch, rgb):
+        key = (ch, rgb)
+        s = self.cache.get(key)
+        if s is None:
+            s = self.font.render(ch, True, rgb)
+            if len(self.cache) > 40000:
+                self.cache.clear()
+            self.cache[key] = s
+        return s
+
+    def draw(self, surf, img):
+        lum = img @ np.array([0.299, 0.587, 0.114], np.float32)
+        lum = np.clip(lum ** 0.75, 0, 1)
+        idx = (lum * (len(RAMP) - 1)).astype(int)
+        q = (np.clip(img / (lum[..., None] + 1e-3), 0, 4))  # chroma ratio
+        # boost color so glyphs stay vivid even when dim
+        col = np.clip(img * 1.35 + 0.02, 0, 1)
+        col = (col * 15).astype(int) * 17                    # 16 levels per channel
+        for r in range(ROWS):
+            for c in range(COLS):
+                i = idx[r, c]
+                if i == 0:
+                    continue
+                rgb = (int(col[r, c, 0]), int(col[r, c, 1]), int(col[r, c, 2]))
+                surf.blit(self.glyph(RAMP[i], rgb), (c * CELL_W, r * CELL_H))
+
+
+# ----------------------------------------------------------------- main
+def main():
+    pygame.init()
+    W, H = COLS * CELL_W, ROWS * CELL_H
+    screen = pygame.display.set_mode((W, H))
+    pygame.display.set_caption("Eye -> Space")
+    font = pygame.font.SysFont("couriernew,consolas,dejavusansmono,monospace", FONT_SIZE, bold=True)
+    renderer = AsciiRenderer(font)
+    clock = pygame.time.Clock()
+    t0 = pygame.time.get_ticks() / 1000
+    shot = 0
+
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT or (e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE):
+                pygame.quit()
+                sys.exit()
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_SPACE:
+                    t0 = pygame.time.get_ticks() / 1000
+                if e.key == pygame.K_s:
+                    pygame.image.save(screen, f"heart_eyes_{shot}.png")
+                    shot += 1
+
+        t = pygame.time.get_ticks() / 1000 - t0
+        screen.fill((4, 3, 5))
+        renderer.draw(screen, compose(t))
+        pygame.display.flip()
+        clock.tick(FPS)
+
+
+if __name__ == "__main__":
+    main()
 
