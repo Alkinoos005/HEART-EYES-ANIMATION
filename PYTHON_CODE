@@ -257,12 +257,12 @@ def make_music():
     # slow "tension" curve: 0 during the eye, 1 on the heart
     bright = 0.25 + 0.75 * _sstep(4.5, 8.0, t) * (1 - _sstep(13.0, 15.0, t) * 0.7)
 
-    # ---- sub drone (A1) + gentle swell
+    # Sub drone (A1) + gentle swell
     f0 = _snap(55.0)
     drone = np.sin(TAU * f0 * t) + 0.35 * np.sin(TAU * 2 * f0 * t)
     drone *= 0.30 + 0.25 * np.sin(TAU * t / LOOP - 1.0) ** 2 + 0.25 * _sstep(5, 8, t)
 
-    # ---- evolving pads: Am - F - C - G, cross-faded around the loop
+    # Evolving pads: Am - F - C - G, cross-faded around the loop
     chords = [(110.0, 130.81, 164.81), (87.31, 110.0, 130.81),
               (130.81, 164.81, 196.0), (98.0, 123.47, 146.83)]
     bar = LOOP / len(chords)
@@ -291,7 +291,7 @@ def make_music():
         padL += sh * 0.8
         padR += sh * 1.0
 
-    # ---- riser (4.5 -> 8 s) and impact at 8 s
+    # Riser (4.5 -> 8 s) and impact at 8 s
     rise = _sstep(4.5, 8.0, t) ** 2.2 * (t < 8.0)
     noise = r.standard_normal(N)
     hp = np.diff(noise, prepend=0.0)                                   # crude high-pass
@@ -320,7 +320,7 @@ def make_music():
             heart += np.sin(TAU * np.cumsum(np.where(m, 80 * np.exp(-np.where(m, tt, 0) / 0.08) + 38, 0)) / SR) * e * amp
     heart *= beat_gain * 0.9
 
-    # ---- sparkle chimes (A minor pentatonic, bell-like, inharmonic partials)
+    # Sparkle chimes (A minor pentatonic, bell-like, inharmonic partials)
     pent = [880.0, 1046.5, 1318.5, 1568.0, 1760.0, 2093.0]
     chL = np.zeros(N)
     chR = np.zeros(N)
@@ -335,7 +335,7 @@ def make_music():
         chL += v * (1 - p)
         chR += v * p
 
-    # ---- mix with reverb
+    # Mix with reverb
     dryL = drone * 0.55 + padL * 0.030 + riser + sweep + boom + heart
     dryR = drone * 0.55 + padR * 0.030 + riser * 0.9 + sweep + boom + heart
     wetL = _reverb(padL * 0.030 + chL * 1.6 + boom * 0.4, 3.4, 1)
