@@ -32,23 +32,19 @@ RAMP = " .'`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
 RAMP = np.array(list(RAMP))
 rng = np.random.default_rng(7)
 
-
 # Helpers
 def smoothstep(a, b, x):
     t = np.clip((x - a) / (b - a + 1e-9), 0, 1)
     return t * t * (3 - 2 * t)
 
-
 def mix(a, b, t):
     return a + (b - a) * t
 
-
-# coordinate grid in "square" units (cells are ~1:1.55 tall, so correct for it)
+# Coordinate grid in "square" units (cells are ~1:1.55 tall, so this will be correct for it)
 ys, xs = np.mgrid[0:ROWS, 0:COLS].astype(np.float32)
 ASPECT = (CELL_W * COLS) / (CELL_H * ROWS)
 X = (xs / (COLS - 1) * 2 - 1) * ASPECT      # -aspect .. aspect
 Y = ys / (ROWS - 1) * 2 - 1                  # -1 .. 1
-
 
 # Eye model
 def eye_layers(t, look_x, look_y, openness, pupil_r):
@@ -58,11 +54,11 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     lid_h = 0.80 * openness * np.clip(1 - u * u, 0, 1) ** 0.85
     inside = np.abs(Y) < lid_h
 
-    # sclera: slightly pink/white, darker toward the corners
+    # Sclera: slightly pink/white, darker toward the corners
     sclera = np.stack([0.62, 0.52, 0.48], -1) * (1 - 0.55 * np.clip(np.abs(u), 0, 1) ** 2)[..., None]
     sclera = sclera * (1 - 0.45 * (np.abs(Y) / (lid_h + 1e-3)) ** 2)[..., None]
 
-    # iris
+    # IRIS
     cx, cy = look_x * 0.45, look_y * 0.18
     dx, dy = X - cx, Y - cy
     r = np.sqrt(dx * dx + dy * dy)
@@ -81,14 +77,14 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     limbal = smoothstep(0.80, 1.0, rn)[..., None]       # dark ring around iris
     iris = iris * (1 - 0.75 * limbal)
 
-    # pupil
+    # Pupil
     pupil = r < pupil_r
     edge = smoothstep(pupil_r + 0.03, pupil_r - 0.01, r)
 
     img = np.where(in_iris[..., None], iris, sclera)
     img = img * (1 - edge[..., None] * 0.97)
 
-    # specular highlight
+    # Specular Highlight
     hx, hy = cx - 0.17, cy - 0.17
     hl = np.exp(-(((X - hx) ** 2 + (Y - hy) ** 2) / 0.006))
     img = img + hl[..., None] * 0.9
@@ -103,15 +99,13 @@ def eye_layers(t, look_x, look_y, openness, pupil_r):
     out = out * (1 - 0.9 * rim[..., None])
     return np.clip(out, 0, 1)
 
-
-# ----------------------------------------------------------------- heart model
+# Heart Model
 def heart_mask(scale, cx=0.0, cy=0.05):
     """Signed-ish heart field: >0 inside. Classic implicit heart curve."""
     x = (X - cx) / scale * 1.25
     y = -(Y - cy) / scale * 1.25 + 0.15
     f = (x * x + y * y - 1) ** 3 - x * x * y ** 3
     return -f
-
 
 def heart_layer(t, scale):
     f = heart_mask(scale)
@@ -126,7 +120,7 @@ def heart_layer(t, scale):
     return np.clip(col, 0, 1), inside
 
 
-# ----------------------------------------------------------------- sparkles
+# Sparkles
 N_STARS = 45
 star_x = rng.uniform(-ASPECT, ASPECT, N_STARS)
 star_y = rng.uniform(-1, 1, N_STARS)
@@ -153,11 +147,11 @@ def sparkle_layer(t, strength):
     return np.clip(img, 0, 1)
 
 
-# ----------------------------------------------------------------- timeline
+# Timeline
 def compose(t):
     t = t % LOOP
 
-    # eye animation
+    # Eye Animation
     look_x = np.sin(t * 0.9) * 0.8
     look_y = np.sin(t * 0.6 + 1.0) * 0.5
     blink_phase = (t % 4.2)
@@ -184,8 +178,7 @@ def compose(t):
     img = np.clip(eye + heart + spark, 0, 1)
     return img
 
-
-# ----------------------------------------------------------------- ASCII draw
+# ASCII draw
 class AsciiRenderer:
     def __init__(self, font):
         self.font = font
@@ -217,9 +210,7 @@ class AsciiRenderer:
                 rgb = (int(col[r, c, 0]), int(col[r, c, 1]), int(col[r, c, 2]))
                 surf.blit(self.glyph(RAMP[i], rgb), (c * CELL_W, r * CELL_H))
 
-
-
-# ----------------------------------------------------------------- music
+# Music
 SR = 44100
 
 
@@ -284,7 +275,7 @@ def make_music():
                 voice *= w
                 padL += voice * (1 - pan)
                 padR += voice * pan
-    # airy octave-up shimmer that blooms with the heart
+    # Airy octave-up shimmer that blooms with the heart
     for nf in (329.63, 392.0, 493.88):
         f = _snap(nf)
         sh = np.sin(TAU * f * t + 0.8 * np.sin(TAU * 5 * t / LOOP)) * 0.05 * _sstep(5, 8, t) * (1 - _sstep(13, 15, t))
@@ -302,7 +293,7 @@ def make_music():
     boom = np.sin(TAU * np.cumsum(70 * np.exp(-ti / 0.5) + 28) / SR) * boom_env * 1.1
     boom += r.standard_normal(N) * np.exp(-ti / 0.25) * (t >= 8.0) * 0.12
 
-    # ---- heartbeat, locked to the visual pulse: sin(7t)^2 peaks at t = (pi/2 + n*pi) / 7
+    # Heartbeat, locked to the visual pulse: sin(7t)^2 peaks at t = (pi/2 + n*pi) / 7
     heart = np.zeros(N)
     beat_gain = _sstep(7.0, 8.5, t) * (1 - _sstep(13.0, 14.6, t))
     n = 0
