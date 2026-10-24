@@ -17,23 +17,23 @@ import sys
 import numpy as np
 import pygame
 
-# ----------------------------------------------------------------- settings
+# Settings
 COLS, ROWS = 110, 62          # ASCII grid size
 CELL_W, CELL_H = 9, 14        # pixel size of one character cell
 FONT_SIZE = 14
 FPS = 24
 LOOP = 15.0
 
-# ---- δικό σου τραγούδι (βάλε το αρχείο στον ίδιο φάκελο με το script)
+# Put your song on the shame file as your script
 MUSIC_FILE = "song.mp3"     # .mp3 / .ogg / .wav
-MUSIC_START = 23.0          # από ποιο δευτερόλεπτο του τραγουδιού να ξεκινά
-MUSIC_FADE_MS = 600         # fade in / fade out στα όρια κάθε κύκλου
+MUSIC_START = 23.0          # The starting(sec) of the song you picked
+MUSIC_FADE_MS = 600         # fade in / fade out in every circle's limit
 RAMP = " .'`^\",:;Il!i~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
 RAMP = np.array(list(RAMP))
 rng = np.random.default_rng(7)
 
 
-# ----------------------------------------------------------------- helpers
+# Helpers
 def smoothstep(a, b, x):
     t = np.clip((x - a) / (b - a + 1e-9), 0, 1)
     return t * t * (3 - 2 * t)
@@ -50,7 +50,7 @@ X = (xs / (COLS - 1) * 2 - 1) * ASPECT      # -aspect .. aspect
 Y = ys / (ROWS - 1) * 2 - 1                  # -1 .. 1
 
 
-# ----------------------------------------------------------------- eye model
+# Eye model
 def eye_layers(t, look_x, look_y, openness, pupil_r):
     """Return rgb image (ROWS, COLS, 3) in 0..1 for the human eye."""
     # almond shaped eyelid opening
